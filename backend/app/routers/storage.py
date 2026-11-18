@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.schemas import ActionPayload, ActionResult, EntryPayload, PageResult
-from app.services.storage import StorageService
+from app.services.storage import MANIFEST_EXPORT_FIELDS, StorageService
 
 router = APIRouter(prefix="/api/storage", tags=["存储落地"])
 
@@ -63,6 +63,54 @@ def export_entries(
     return StreamingResponse(
         iter([output.getvalue()]), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="storage.csv"'})
+
+
+@router.get("/manifest", response_model=PageResult[dict])
+def list_manifest(
+    dataset_no: str | None = Query(default=None, description="数据集编号"),
+    storage_no: str | None = Query(default=None, description="配置编号"),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=50, ge=1, le=500),
+) -> PageResult[dict]:
+    """查看去重落地清单；清单只包含去重明细数据集里的保留项。"""
+    items, total = service.list_manifest(
+        dataset_no=dataset_no, storage_no=storage_no, page=page, size=size)
+    return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/manifest/export")
+def export_manifest(
+    dataset_no: str | None = Query(default=None),
+    storage_no: str | None = Query(default=None),
+) -> StreamingResponse:
+    """导出去重落地清单，便于业务人员核对保留项与策略版本。"""
+    items, _ = service.list_manifest(
+        dataset_no=dataset_no, storage_no=storage_no, page=1, size=1000000)
+    columns = MANIFEST_EXPORT_FIELDS
+    output = io.StringIO()
+    output.write("﻿")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(["id", *columns])
+    for item in items:
+        row = []
+        for value in [item.get("id"), *(item.get(field, "") for field in columns)]:
+            text = "" if value is None else str(value)
+            row.append("'" + text if text.startswith(("=", "+", "-", "@")) else text)
+        writer.writerow(row)
+    return StreamingResponse(
+        iter([output.getvalue()]), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="storage-manifest.csv"'})
+
+
+@router.post("/manifest", response_model=ActionResult)
+def build_manifest(payload: dict[str, object]) -> ActionResult:
+    """消费去重明细数据集生成去重落地清单；同一数据集重复提交不会生成重复结果。"""
+    dataset_no = str(payload.get("数据集编号") or "").strip()
+    storage_no = str(payload.get("配置编号") or "").strip()
+    entries, message = service.build_manifest(dataset_no, storage_no)
+    if entries is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry={"items": entries})
 
 
 @router.get("/{entry_id}", response_model=dict)

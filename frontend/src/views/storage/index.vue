@@ -72,6 +72,68 @@
       </form>
     </div>
 
+    <section class="sub-section">
+      <header class="sub-head">
+        <h3>去重落地清单</h3>
+        <span class="sub-desc">消费重复去重的去重明细数据集，只落地去重后的保留项；同一数据集不会生成重复结果。</span>
+      </header>
+      <form class="filter-bar" @submit.prevent="reloadManifest">
+        <label class="filter-item">
+          <span>数据集编号</span>
+          <select v-model="manifestDatasetNo" data-testid="manifest-dataset" @change="reloadManifest">
+            <option value="">全部数据集</option>
+            <option v-for="dataset in datasetOptions" :key="String(dataset.数据集编号)" :value="dataset.数据集编号">
+              {{ dataset.数据集编号 }} · {{ dataset.批次编号 }} · {{ dataset.策略版本 }}
+            </option>
+          </select>
+        </label>
+        <label class="filter-item">
+          <span>配置编号</span>
+          <input v-model="manifestStorageNo" data-testid="manifest-storage" placeholder="选择落地配置" />
+        </label>
+        <button class="btn" data-testid="manifest-query" type="submit">查看清单</button>
+        <button class="btn primary" data-testid="manifest-build" type="button" @click="buildManifest">
+          生成去重落地清单
+        </button>
+      </form>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>落地编号</th>
+            <th>配置编号</th>
+            <th>数据集编号</th>
+            <th>批次编号</th>
+            <th>策略编号</th>
+            <th>策略版本</th>
+            <th>业务键</th>
+            <th>记录编号</th>
+            <th>记录摘要</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="item in manifestRows"
+            :key="String(item.id)"
+            :data-testid="`manifest-row-${item.落地编号}`"
+          >
+            <td>{{ item.落地编号 }}</td>
+            <td>{{ item.配置编号 || '—' }}</td>
+            <td>{{ item.数据集编号 }}</td>
+            <td>{{ item.批次编号 }}</td>
+            <td>{{ item.策略编号 }}</td>
+            <td class="version-cell">{{ item.策略版本 }}</td>
+            <td>{{ item.业务键 }}</td>
+            <td>{{ item.记录编号 }}</td>
+            <td>{{ item.记录摘要 || '—' }}</td>
+          </tr>
+          <tr v-if="!manifestRows.length">
+            <td colspan="9" class="empty-state">暂无去重落地清单，可先在重复去重生成去重明细数据集</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-if="manifestMessage" class="hint-text" data-testid="manifest-message">{{ manifestMessage }}</p>
+    </section>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条存储落地记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -82,9 +144,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { request } from '@/api/client'
+import { fetchJson, request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
+type ManifestRow = {
+  id?: number
+  落地编号: string
+  配置编号: string
+  数据集编号: string
+  批次编号: string
+  策略编号: string
+  策略版本: string
+  业务键: string
+  记录编号: string
+  记录摘要: string
+}
 
 const ENDPOINT = '/api/storage'
 const columns = ["配置编号", "存储类型", "连接信息", "分区策略", "压缩格式", "保存天数", "备份副本", "清理策略"]
@@ -182,7 +256,70 @@ async function reload() {
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '存储落地列表读取失败'
   }
+  await Promise.all([reloadManifest(), reloadDatasetOptions()])
+}
+
+const manifestRows = ref<ManifestRow[]>([])
+const manifestDatasetNo = ref('')
+const manifestStorageNo = ref('')
+const manifestMessage = ref('')
+const datasetOptions = ref<Row[]>([])
+
+async function reloadDatasetOptions() {
+  try {
+    const payload = await fetchJson<{ items: Row[] }>('/api/dedup/datasets?size=200')
+    datasetOptions.value = payload.items ?? []
+  } catch {
+    datasetOptions.value = []
+  }
+}
+
+async function reloadManifest() {
+  const params = new URLSearchParams()
+  if (manifestDatasetNo.value) params.set('dataset_no', manifestDatasetNo.value)
+  if (manifestStorageNo.value) params.set('storage_no', manifestStorageNo.value)
+  try {
+    const payload = await fetchJson<{ items: ManifestRow[] }>(`${ENDPOINT}/manifest?${params.toString()}`)
+    manifestRows.value = payload.items ?? []
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '去重落地清单读取失败'
+  }
+}
+
+async function buildManifest() {
+  errorMessage.value = ''
+  manifestMessage.value = ''
+  if (!manifestDatasetNo.value) {
+    errorMessage.value = '请先选择去重明细数据集，再生成去重落地清单'
+    return
+  }
+  try {
+    const response = await request(`${ENDPOINT}/manifest`, {
+      method: 'POST',
+      body: JSON.stringify({
+        数据集编号: manifestDatasetNo.value,
+        配置编号: manifestStorageNo.value,
+      }),
+    })
+    const payload = await response.json()
+    if (!response.ok || !payload.ok) throw new Error(payload.message || '生成去重落地清单失败')
+    manifestMessage.value = payload.message
+    await reloadManifest()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '生成去重落地清单失败'
+  }
 }
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.sub-section { margin-top: 24px; }
+.sub-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.sub-head h3 { margin: 0; font-size: 15px; }
+.sub-desc { color: var(--muted); font-size: 12px; }
+.version-cell { font-family: monospace; font-size: 11px; }
+.hint-text { color: #1f6feb; font-size: 12px; }
+.filter-item select { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.version-cell { font-family: monospace; font-size: 11px; }
+</style>

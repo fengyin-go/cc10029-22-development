@@ -8,6 +8,17 @@ from typing import Any
 
 from app.seed import SEED_ROWS
 
+# 去重明细数据集、原始批次、重复证据和去重落地清单属于业务流程内部表，
+# 不在运营概览里当成独立业务模块展示，避免把“依据”误算成新的业务对象。
+INTERNAL_TABLES = {
+    "dedup_raw_batches",
+    "dedup_datasets",
+    "dedup_details",
+    "dedup_evidence",
+    "dedup_rejections",
+    "storage_dedup_manifest",
+}
+
 
 class Store:
     def __init__(self) -> None:
@@ -16,7 +27,7 @@ class Store:
         }
 
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        return sorted(name for name in self._tables if name not in INTERNAL_TABLES)
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
